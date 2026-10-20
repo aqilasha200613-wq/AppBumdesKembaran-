@@ -115,54 +115,23 @@ def create_dynamic_qris(base_qris: str, amount: float) -> str:
 
 from google.oauth2.service_account import Credentials
 
-# Scope otorisasi wajib Google Sheets & Drive API
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
+import os
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
-def get_gspread_sheet(sheet_name="DataPemesan"):
-    client = None
-    last_err = ""
+# Mengambil URL dari Vercel
+SQLALCHEMY_DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./pos_bumdes.db")
 
-    # 1. Cek Kredensial dari Environment Variable Vercel
-    env_creds = os.environ.get("GOOGLE_CREDENTIALS")
-    if env_creds:
-        try:
-            creds_dict = json.loads(env_creds)
-            if "private_key" in creds_dict and isinstance(creds_dict["private_key"], str):
-                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-            client = gspread.service_account_from_dict(creds_dict)
-        except Exception as e:
-            last_err = f"ENV Creds Error: {str(e)}"
+# Menyesuaikan awalan URL untuk SQLAlchemy
+if SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
+    SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-    # 2. Cek Kredensial dari File Lokal credentials.json
-    if not client:
-        cred_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "credentials.json")
-        if not os.path.exists(cred_path): 
-            cred_path = "credentials.json"
-        
-        if os.path.exists(cred_path):
-            try:
-                with open(cred_path, 'r', encoding='utf-8') as f:
-                    creds_dict = json.load(f)
-                if "private_key" in creds_dict and isinstance(creds_dict["private_key"], str):
-                    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-                client = gspread.service_account_from_dict(creds_dict)
-            except Exception as e:
-                last_err = f"File Creds Error: {str(e)}"
-        else:
-            if not last_err:
-                last_err = "GOOGLE_CREDENTIALS (ENV) & credentials.json tidak ditemukan!"
+if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(SQLALCHEMY_DATABASE_URL)
 
-    if not client:
-        raise Exception(last_err)
-
-    try:
-        spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        return spreadsheet.worksheet(sheet_name)
-    except Exception as e:
-        raise Exception(f"Gagal Buka Sheet '{sheet_name}': {str(e)}")
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 @app.post("/login")
@@ -308,7 +277,24 @@ class StokKebunDB(Base):
     status = Column(String, default="Tersedia")
     id_pesanan = Column(String, nullable=True)
     nama_pemesan = Column(String, nullable=True)
+class UserDB(Base):
+    __tablename__ = "admin_users"
+    username = Column(String, primary_key=True, index=True)
+    password = Column(String)
+    nama = Column(String)
+    wa = Column(String)
+    role = Column(String)
 
+try: 
+    Base.metadata.create_all(bind=engine)
+    # Bikin akun default otomatis jika tabel masih kosong
+    db = SessionLocal()
+    if not db.query(UserDB).first():
+        db.add(UserDB(username="BUDI", password="123", nama="Budiono", wa="0812345", role="Admin"))
+        db.commit()
+    db.close()
+except Exception as e: 
+    pass
 try: Base.metadata.create_all(bind=engine)
 except Exception: pass
 
@@ -1654,28 +1640,17 @@ def login_page(error: str = ""):
     return HTMLResponse(content=Template(LOGIN_HTML).render(error=error))
 
 @app.post("/login")
-def process_login(response: Response, username: str = Form(...), password: str = Form(...), shift: str = Form(...)):
-    sheet = get_gspread_sheet("Admin_Users")
-    if not sheet: return RedirectResponse(url="/login?error=Gagal+koneksi+ke+Database+User", status_code=303)
-    try:
-        records = sheet.get_all_values()
-        user_found = False
-        for row in records[1:]:
-            if len(row) >= 5 and row[0].upper() == username.upper() and row[1] == password:
-                user_found = True
-                nama, _, role = row[2], row[3], row[4]
-                token = create_session_token(username.upper(), nama, role, shift)
-                if role == "Kasir":
-                    target_url = "/pos"
-                elif role == "Admin Kebun":
-                    target_url = "/admin-kebun"
-                else:
-                    target_url = "/admin"
-                response = RedirectResponse(url=target_url, status_code=303)
-                response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400) # 24 hours
-                return response
-        if not user_found: return RedirectResponse(url="/login?error=Username+atau+Password+salah!", status_code=303)
-    except Exception as e: return RedirectResponse(url=f"/login?error=Error:{str(e)}", status_code=303)
+def process_login(response: Response, username: str = Form(...), password: str = Form(...), shift: str = Form(...), db: Session = Depends(get_db)):
+    user = db.query(UserDB).filter(UserDB.username == username.upper(), UserDB.password == password).first()
+    
+    if user:
+        token = create_session_token(user.username, user.nama, user.role, shift)
+        target_url = "/pos" if user.role == "Kasir" else ("/admin-kebun" if user.role == "Admin Kebun" else "/admin")
+        response = RedirectResponse(url=target_url, status_code=303)
+        response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400)
+        return response
+        
+    return RedirectResponse(url="/login?error=Username+atau+Password+salah!", status_code=303)
 
 @app.get("/logout")
 def logout(response: Response):
