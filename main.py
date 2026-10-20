@@ -1,17 +1,14 @@
-from fastapi import FastAPI, Response, Request, Form, Depends, HTTPException, status, BackgroundTasks, Cookie
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi import FastAPI, Response, Request, Form, Depends, HTTPException, status, Cookie
+from fastapi.responses import HTMLResponse, RedirectResponse
 import json
 import base64
-from sqlalchemy import create_engine, Column, Integer, String, Float, or_
+from sqlalchemy import create_engine, Column, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from datetime import datetime
-import os
-import urllib.parse
 from jinja2 import Template
 from typing import Optional
 
-app = FastAPI(title="POS BUMDes Kembaran (Safe Mode)")
+app = FastAPI(title="POS BUMDes Kembaran (Stable)")
 
 SECRET_KEY = "BUMDES_RAHASIA_SUPER"
 
@@ -25,26 +22,10 @@ def get_current_user(session_token: Optional[str] = Cookie(None)):
         return json.loads(base64.urlsafe_b64decode(session_token.encode()).decode())
     except Exception: return None
 
-# Koneksi Database Aman (Fallback otomatis ke SQLite jika URL Supabase bermasalah)
-RAW_DB_URL = os.environ.get("DATABASE_URL", "")
-if RAW_DB_URL.startswith("postgres://"):
-    SQLALCHEMY_DATABASE_URL = RAW_DB_URL.replace("postgres://", "postgresql+psycopg2://", 1)
-elif RAW_DB_URL.startswith("postgresql://"):
-    SQLALCHEMY_DATABASE_URL = RAW_DB_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
-else:
-    SQLALCHEMY_DATABASE_URL = "sqlite:///./pos_bumdes.db"
-
-try:
-    if "sqlite" in SQLALCHEMY_DATABASE_URL:
-        engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-    else:
-        engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-except Exception as e:
-    # Fallback darurat ke SQLite jika koneksi cloud gagal total
-    engine = create_engine("sqlite:///./pos_bumdes.db", connect_args={"check_same_thread": False})
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
+# Menggunakan SQLite lokal di server agar 100% stabil dan anti-gagal koneksi
+SQLALCHEMY_DATABASE_URL = "sqlite:///./pos_bumdes_stable.db"
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 class UserDB(Base):
@@ -55,30 +36,20 @@ class UserDB(Base):
     wa = Column(String)
     role = Column(String)
 
-class ConfigDB(Base):
-    __tablename__ = "app_config"
-    key = Column(String, primary_key=True, index=True)
-    value = Column(String)
+Base.metadata.create_all(bind=engine)
 
-# Buat tabel otomatis
-try:
-    Base.metadata.create_all(bind=engine)
-    db_init = SessionLocal()
-    if not db_init.query(UserDB).first():
-        db_init.add(UserDB(username="BUDI", password="123", nama="Budiono", wa="08974982752", role="Admin"))
-        db_init.add(UserDB(username="KASIR", password="123", nama="Kasir Utama", wa="08974982752", role="Kasir"))
-        db_init.commit()
-    db_init.close()
-except Exception:
-    pass
+# Buat akun default otomatis
+db_init = SessionLocal()
+if not db_init.query(UserDB).first():
+    db_init.add(UserDB(username="BUDI", password="123", nama="Budiono", wa="08974982752", role="Admin"))
+    db_init.add(UserDB(username="KASIR", password="123", nama="Kasir Utama", wa="08974982752", role="Kasir"))
+    db_init.commit()
+db_init.close()
 
 def get_db():
     db = SessionLocal()
     try: yield db
     finally: db.close()
-
-def get_app_config() -> dict:
-    return {"Kuota Promo": 100, "Persen Diskon": 0.0, "Tanggal Panen": "Segera", "Harga Per Kg": 35000.0}
 
 LOGIN_HTML = r"""
 <!DOCTYPE html>
@@ -86,14 +57,14 @@ LOGIN_HTML = r"""
 <head><meta charset="UTF-8"><title>Login POS BUMDes</title><script src="https://cdn.tailwindcss.com"></script></head>
 <body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
     <div class="max-w-md w-full bg-white rounded-2xl shadow-xl p-6 border">
-        <h1 class="text-xl font-black text-center mb-2">POS BUMDES KEMBARAN</h1>
+        <h1 class="text-xl font-black text-center mb-1">POS BUMDES KEMBARAN</h1>
         <p class="text-xs text-center text-gray-500 mb-4">Silakan Login ke Sistem</p>
         <form action="/login" method="POST" class="space-y-4">
             {% if error %}<div class="bg-red-50 text-red-700 p-2 rounded text-xs font-bold text-center">{{ error }}</div>{% endif %}
             <div><label class="text-xs font-bold">Username</label><input type="text" name="username" required class="w-full p-2 border rounded uppercase" value="BUDI"></div>
             <div><label class="text-xs font-bold">Password</label><input type="password" name="password" required class="w-full p-2 border rounded" value="123"></div>
-            <div><label class="text-xs font-bold">Shift</label><select name="shift" class="w-full p-2 border rounded"><option value="Shift 1">Shift 1</option></select></div>
-            <button type="submit" class="w-full bg-blue-600 text-white font-bold py-3 rounded">MASUK KE SISTEM 🚀</button>
+            <div><label class="text-xs font-bold">Shift Kerja</label><select name="shift" class="w-full p-2 border rounded"><option value="Shift 1">Shift 1 (Pagi)</option><option value="Shift 2">Shift 2 (Siang)</option></select></div>
+            <button type="submit" class="w-full bg-blue-600 text-white font-bold py-3 rounded-lg shadow">MASUK KE SISTEM 🚀</button>
         </form>
     </div>
 </body>
@@ -105,10 +76,11 @@ POS_HTML = r"""
 <html lang="id">
 <head><meta charset="UTF-8"><title>Kasir POS</title><script src="https://cdn.tailwindcss.com"></script></head>
 <body class="bg-gray-100 min-h-screen p-6 flex items-center justify-center">
-    <div class="max-w-md w-full bg-white rounded-2xl shadow p-6 text-center space-y-4">
-        <h1 class="font-bold text-xl text-blue-600">🎉 BERHASIL LOGIN!</h1>
-        <p class="text-sm text-gray-600">Selamat datang, <b>{{ user_aktif.nama }}</b> (Role: {{ user_aktif.role }})</p>
-        <a href="/logout" class="block bg-red-500 text-white py-2 rounded font-bold text-xs">Keluar / Logout</a>
+    <div class="max-w-md w-full bg-white rounded-2xl shadow-lg p-6 text-center space-y-4">
+        <div class="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center text-3xl mx-auto font-bold">✓</div>
+        <h1 class="font-bold text-xl text-gray-800">BERHASIL MASUK!</h1>
+        <p class="text-sm text-gray-600">Halo, <b class="text-blue-600">{{ user_aktif.nama }}</b><br>Role: <b>{{ user_aktif.role }}</b> | Shift: <b>{{ user_aktif.shift }}</b></p>
+        <div class="pt-4 border-t"><a href="/logout" class="block bg-red-500 hover:bg-red-600 text-white py-2.5 rounded-lg font-bold text-xs shadow">Keluar / Logout</a></div>
     </div>
 </body>
 </html>
@@ -120,15 +92,12 @@ def login_page(error: str = ""):
 
 @app.post("/login")
 def process_login(response: Response, username: str = Form(...), password: str = Form(...), shift: str = Form(...), db: Session = Depends(get_db)):
-    try:
-        user = db.query(UserDB).filter(UserDB.username == username.upper(), UserDB.password == password).first()
-        if user:
-            token = create_session_token(user.username, user.nama, user.role, shift)
-            res = RedirectResponse(url="/pos", status_code=303)
-            res.set_cookie(key="session_token", value=token, httponly=True, max_age=86400)
-            return res
-    except Exception as e:
-        return RedirectResponse(url=f"/login?error=Database+Error:+{str(e)[:30]}", status_code=303)
+    user = db.query(UserDB).filter(UserDB.username == username.upper(), UserDB.password == password).first()
+    if user:
+        token = create_session_token(user.username, user.nama, user.role, shift)
+        res = RedirectResponse(url="/pos", status_code=303)
+        res.set_cookie(key="session_token", value=token, httponly=True, max_age=86400)
+        return res
     return RedirectResponse(url="/login?error=Username+atau+Password+salah!", status_code=303)
 
 @app.get("/logout")
