@@ -114,41 +114,49 @@ def create_dynamic_qris(base_qris: str, amount: float) -> str:
     return new_qris + f"{crc:04X}"
 
 def get_gspread_sheet(sheet_name="DataPemesan"):
-    if not os.path.exists("credentials.json"): return None
+    client = None
+
+    # 1. Pembacaan dari Environment Variable Vercel (GOOGLE_CREDENTIALS)
+    env_creds = os.environ.get("GOOGLE_CREDENTIALS")
+    if env_creds:
+        try:
+            creds_dict = json.loads(env_creds)
+            # Perbaikan otomatis untuk format private_key
+            if "private_key" in creds_dict and isinstance(creds_dict["private_key"], str):
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            client = gspread.service_account_from_dict(creds_dict)
+        except Exception as e:
+            print("Gagal membaca GOOGLE_CREDENTIALS dari ENV:", e)
+
+    # 2. Alternatif dari file credentials.json
+    if not client:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        cred_path = os.path.join(base_dir, "credentials.json")
+        if not os.path.exists(cred_path): cred_path = "credentials.json"
+        
+        if os.path.exists(cred_path):
+            try:
+                with open(cred_path, 'r', encoding='utf-8') as f:
+                    creds_dict = json.load(f)
+                if "private_key" in creds_dict and isinstance(creds_dict["private_key"], str):
+                    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+                client = gspread.service_account_from_dict(creds_dict)
+            except Exception as e:
+                print("Gagal membaca credentials.json:", e)
+
+    if not client:
+        print("ERROR: Kunci Otorisasi Google Sheets tidak ditemukan!")
+        return None
+
     try:
-        client = gspread.service_account(filename="credentials.json")
         spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        try: return spreadsheet.worksheet(sheet_name)
+        try:
+            return spreadsheet.worksheet(sheet_name)
         except Exception:
-            if sheet_name == "Config":
-                sheet = spreadsheet.add_worksheet(title="Config", rows=10, cols=10)
-                sheet.append_row(["Kuota Promo", "Persen Diskon", "Tanggal Panen", "WA Admin Utama", "WA Admin Keuangan", "WA Admin Kebun", "Harga Per Kg"])
-                sheet.append_row([100, 10, "2026-11-15", "628123456789", "628123456790", "628123456791", 52500])
-                return sheet
-            elif sheet_name == "POS":
-                sheet = spreadsheet.add_worksheet(title="POS", rows=100, cols=14)
-                sheet.append_row(["ID POS", "Tanggal", "Tipe Transaksi", "ID Referensi PO", "Nama Pelanggan", "Qty Golden (Butir/KG)", "Qty White (Butir/KG)", "Diskon", "Total Tagihan", "Dibayar", "Kembalian", "Metode Pembayaran", "Shift", "Petugas Kasir"])
-                return sheet
-            elif sheet_name == "Aktual_Kebun":
-                sheet = spreadsheet.add_worksheet(title="Aktual_Kebun", rows=100, cols=10)
-                sheet.append_row(["ID Stok", "Lajur", "Baris", "Jenis Buah", "Berat Aktual (KG)", "Status", "ID Pesanan (PO)", "Nama Pemesan", "Waktu Update"])
-                return sheet
-            elif sheet_name == "Admin_Users":
-                sheet = spreadsheet.add_worksheet(title="Admin_Users", rows=50, cols=5)
-                sheet.append_row(["Username", "Password", "Nama Lengkap", "No WhatsApp", "Role Akses"])
-                sheet.append_row(["BUDI", "290878", "BUDIONO", "08974982752", "Admin"])
-                sheet.append_row(["KEUANGAN", "123456", "Staff Keuangan", "08123456789", "Admin Keuangan"])
-                sheet.append_row(["KEBUN", "123456", "Petugas Kebun", "08123456780", "Admin Kebun"])
-                sheet.append_row(["KASIR1", "123456", "Kasir Utama", "08123456781", "Kasir"])
-                return sheet
-            elif sheet_name == "DataPelanggan":
-                sheet = spreadsheet.add_worksheet(title="DataPelanggan", rows=100, cols=6)
-                sheet.append_row(["Nama Pelanggan", "No WhatsApp", "Kategori Member", "Diskon Khusus (%)", "Status Aktif", "Catatan"])
-                sheet.append_row(["Contoh VIP", "62811111111", "VIP", "15", "Aktif", "Member prioritas"])
-                sheet.append_row(["Contoh Reseller", "62822222222", "Reseller", "20", "Aktif", "Mitra penjual"])
-                return sheet
             return None
-    except Exception: return None
+    except Exception as e:
+        print("ERROR OPEN SPREADSHEET:", e)
+        return None
 
 def get_app_config():
     sheet = get_gspread_sheet("Config")
