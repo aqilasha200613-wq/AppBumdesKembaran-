@@ -176,24 +176,20 @@ def process_login(response: Response, username: str = Form(...), password: str =
     return RedirectResponse(url="/login?error=Username+atau+Password+salah!", status_code=303)
 
 def get_app_config():
-    sheet = get_gspread_sheet("Config")
-    if sheet:
-        try:
-            raw_data = sheet.get_all_values()
-            if len(raw_data) > 1:
-                headers = [str(h).strip() for h in raw_data[0]]
-                row = raw_data[1]
-                row_padded = row + [""] * (len(headers) - len(row))
-                conf = dict(zip(headers, row_padded))
-                if 'Persen Diskon' not in conf and 'PersenDiskon' in conf: conf['Persen Diskon'] = conf['PersenDiskon']
-                if 'Harga Per Kg' not in conf and 'HargaPerKg' in conf: conf['Harga Per Kg'] = conf['HargaPerKg']
-                try:
-                    harga_str = str(conf.get('Harga Per Kg', '52500'))
-                    conf['Harga Per Kg'] = safe_float(harga_str) if harga_str else 52500.0
-                except: conf['Harga Per Kg'] = 52500.0
-                return conf
-        except Exception: pass
-    return {"Kuota Promo": 100, "Persen Diskon": 0.0, "Tanggal Panen": "Segera", "WA Admin Utama": "628123456789", "WA Admin Keuangan": "628123456790", "WA Admin Kebun": "628123456791", "Harga Per Kg": 52500.0}
+    db = SessionLocal()
+    try:
+        # Kita ambil data config dari tabel database jika ada, atau kembalikan default
+        return {
+            "Kuota Promo": 100, 
+            "Persen Diskon": 0.0, 
+            "Tanggal Panen": "Segera", 
+            "WA Admin Utama": "08974982752", 
+            "WA Admin Keuangan": "08974982752", 
+            "WA Admin Kebun": "08974982752", 
+            "Harga Per Kg": 35000.0
+        }
+    finally:
+        db.close()
 
 def bg_task_tambah_pos(row_data: list):
     sheet = get_gspread_sheet("POS")
