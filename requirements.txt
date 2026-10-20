@@ -2,6 +2,5 @@ fastapi
 uvicorn
 gspread
 google-auth
-pydantic
 jinja2
 sqlalchemy
