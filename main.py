@@ -14,7 +14,7 @@ from typing import List, Optional
 
 app = FastAPI(title="POS BUMDes Kembaran Versi 53 (Full Printer Integration)")
 
-SPREADSHEET_ID = "1nYcOD2tJ006gv9HnzSKi-tbjYLaC9nbGUuKiY02BwAI"
+SPREADSHEET_ID = "1nYcOD2tj006gv9HnzSKi-tbjYLaC9nbGUuKiY02BwAI"
 
 SECRET_KEY = "BUMDES_RAHASIA_SUPER"
 
