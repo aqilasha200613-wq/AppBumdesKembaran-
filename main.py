@@ -122,7 +122,13 @@ from sqlalchemy.orm import sessionmaker
 # Mengambil URL dari Vercel
 SQLALCHEMY_DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./pos_bumdes.db")
 
-# Menyesuaikan awalan URL untuk SQLAlchemy
+import os
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+# 1. Koneksi Database Supabase / PostgreSQL
+SQLALCHEMY_DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./pos_bumdes.db")
+
 if SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
     SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -133,31 +139,41 @@ else:
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# 2. Model Tabel User Database
+class UserDB(Base):
+    __tablename__ = "admin_users"
+    username = Column(String, primary_key=True, index=True)
+    password = Column(String)
+    nama = Column(String)
+    wa = Column(String)
+    role = Column(String)
 
+# Otomatis buat tabel & user default BUDI
+Base.metadata.create_all(bind=engine)
+db = SessionLocal()
+if not db.query(UserDB).first():
+    db.add(UserDB(username="BUDI", password="123", nama="Budiono", wa="0812345", role="Admin"))
+    db.commit()
+db.close()
+
+def get_db():
+    db = SessionLocal()
+    try: yield db
+    finally: db.close()
+
+# 3. Fungsi Login Menggunakan Supabase
 @app.post("/login")
-def process_login(response: Response, username: str = Form(...), password: str = Form(...), shift: str = Form(...)):
-    try:
-        sheet = get_gspread_sheet("Admin_Users")
-    except Exception as e:
-        err_msg = urllib.parse.quote(str(e))
-        return RedirectResponse(url=f"/login?error={err_msg}", status_code=303)
+def process_login(response: Response, username: str = Form(...), password: str = Form(...), shift: str = Form(...), db: Session = Depends(get_db)):
+    user = db.query(UserDB).filter(UserDB.username == username.upper(), UserDB.password == password).first()
+    
+    if user:
+        token = create_session_token(user.username, user.nama, user.role, shift)
+        target_url = "/pos" if user.role == "Kasir" else ("/admin-kebun" if user.role == "Admin Kebun" else "/admin")
+        response = RedirectResponse(url=target_url, status_code=303)
+        response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400)
+        return response
         
-    try:
-        records = sheet.get_all_values()
-        user_found = False
-        for row in records[1:]:
-            if len(row) >= 5 and row[0].upper() == username.upper() and row[1] == password:
-                user_found = True
-                nama, _, role = row[2], row[3], row[4]
-                token = create_session_token(username.upper(), nama, role, shift)
-                target_url = "/pos" if role == "Kasir" else ("/admin-kebun" if role == "Admin Kebun" else "/admin")
-                response = RedirectResponse(url=target_url, status_code=303)
-                response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400)
-                return response
-        if not user_found: 
-            return RedirectResponse(url="/login?error=Username+atau+Password+salah!", status_code=303)
-    except Exception as e: 
-        return RedirectResponse(url=f"/login?error=Error:{urllib.parse.quote(str(e))}", status_code=303)
+    return RedirectResponse(url="/login?error=Username+atau+Password+salah!", status_code=303)
 
 def get_app_config():
     sheet = get_gspread_sheet("Config")
