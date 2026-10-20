@@ -123,26 +123,24 @@ SCOPES = [
 
 def get_gspread_sheet(sheet_name="DataPemesan"):
     client = None
+    last_err = ""
 
-    # 1. Pembacaan dari Environment Variable Vercel (GOOGLE_CREDENTIALS)
+    # 1. Cek Kredensial dari Environment Variable Vercel
     env_creds = os.environ.get("GOOGLE_CREDENTIALS")
     if env_creds:
         try:
             creds_dict = json.loads(env_creds)
-            # Perbaikan otomatis untuk format private_key
             if "private_key" in creds_dict and isinstance(creds_dict["private_key"], str):
                 creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-            
-            creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-            client = gspread.authorize(creds)
+            client = gspread.service_account_from_dict(creds_dict)
         except Exception as e:
-            print("Gagal membaca GOOGLE_CREDENTIALS dari ENV:", e)
+            last_err = f"ENV Creds Error: {str(e)}"
 
-    # 2. Alternatif dari file credentials.json lokal
+    # 2. Cek Kredensial dari File Lokal credentials.json
     if not client:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        cred_path = os.path.join(base_dir, "credentials.json")
-        if not os.path.exists(cred_path): cred_path = "credentials.json"
+        cred_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "credentials.json")
+        if not os.path.exists(cred_path): 
+            cred_path = "credentials.json"
         
         if os.path.exists(cred_path):
             try:
@@ -150,35 +148,47 @@ def get_gspread_sheet(sheet_name="DataPemesan"):
                     creds_dict = json.load(f)
                 if "private_key" in creds_dict and isinstance(creds_dict["private_key"], str):
                     creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-                creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-                client = gspread.authorize(creds)
+                client = gspread.service_account_from_dict(creds_dict)
             except Exception as e:
-                print("Gagal membaca credentials.json:", e)
+                last_err = f"File Creds Error: {str(e)}"
+        else:
+            if not last_err:
+                last_err = "GOOGLE_CREDENTIALS (ENV) & credentials.json tidak ditemukan!"
 
     if not client:
-        print("ERROR: Kunci Otorisasi Google Sheets tidak ditemukan!")
-        return None
+        raise Exception(last_err)
 
     try:
         spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        try:
-            return spreadsheet.worksheet(sheet_name)
-        except Exception as e:
-            print(f"ERROR: Worksheet '{sheet_name}' tidak ditemukan:", e)
-            return None
+        return spreadsheet.worksheet(sheet_name)
     except Exception as e:
-        print("ERROR OPEN SPREADSHEET:", e)
-        return None
+        raise Exception(f"Gagal Buka Sheet '{sheet_name}': {str(e)}")
 
+
+@app.post("/login")
+def process_login(response: Response, username: str = Form(...), password: str = Form(...), shift: str = Form(...)):
     try:
-        spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        try:
-            return spreadsheet.worksheet(sheet_name)
-        except Exception:
-            return None
+        sheet = get_gspread_sheet("Admin_Users")
     except Exception as e:
-        print("ERROR OPEN SPREADSHEET:", e)
-        return None
+        err_msg = urllib.parse.quote(str(e))
+        return RedirectResponse(url=f"/login?error={err_msg}", status_code=303)
+        
+    try:
+        records = sheet.get_all_values()
+        user_found = False
+        for row in records[1:]:
+            if len(row) >= 5 and row[0].upper() == username.upper() and row[1] == password:
+                user_found = True
+                nama, _, role = row[2], row[3], row[4]
+                token = create_session_token(username.upper(), nama, role, shift)
+                target_url = "/pos" if role == "Kasir" else ("/admin-kebun" if role == "Admin Kebun" else "/admin")
+                response = RedirectResponse(url=target_url, status_code=303)
+                response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400)
+                return response
+        if not user_found: 
+            return RedirectResponse(url="/login?error=Username+atau+Password+salah!", status_code=303)
+    except Exception as e: 
+        return RedirectResponse(url=f"/login?error=Error:{urllib.parse.quote(str(e))}", status_code=303)
 
 def get_app_config():
     sheet = get_gspread_sheet("Config")
