@@ -113,6 +113,14 @@ def create_dynamic_qris(base_qris: str, amount: float) -> str:
         crc &= 0xFFFF
     return new_qris + f"{crc:04X}"
 
+from google.oauth2.service_account import Credentials
+
+# Scope otorisasi wajib Google Sheets & Drive API
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
 def get_gspread_sheet(sheet_name="DataPemesan"):
     client = None
 
@@ -124,11 +132,13 @@ def get_gspread_sheet(sheet_name="DataPemesan"):
             # Perbaikan otomatis untuk format private_key
             if "private_key" in creds_dict and isinstance(creds_dict["private_key"], str):
                 creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-            client = gspread.service_account_from_dict(creds_dict)
+            
+            creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+            client = gspread.authorize(creds)
         except Exception as e:
             print("Gagal membaca GOOGLE_CREDENTIALS dari ENV:", e)
 
-    # 2. Alternatif dari file credentials.json
+    # 2. Alternatif dari file credentials.json lokal
     if not client:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         cred_path = os.path.join(base_dir, "credentials.json")
@@ -140,12 +150,24 @@ def get_gspread_sheet(sheet_name="DataPemesan"):
                     creds_dict = json.load(f)
                 if "private_key" in creds_dict and isinstance(creds_dict["private_key"], str):
                     creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-                client = gspread.service_account_from_dict(creds_dict)
+                creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+                client = gspread.authorize(creds)
             except Exception as e:
                 print("Gagal membaca credentials.json:", e)
 
     if not client:
         print("ERROR: Kunci Otorisasi Google Sheets tidak ditemukan!")
+        return None
+
+    try:
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        try:
+            return spreadsheet.worksheet(sheet_name)
+        except Exception as e:
+            print(f"ERROR: Worksheet '{sheet_name}' tidak ditemukan:", e)
+            return None
+    except Exception as e:
+        print("ERROR OPEN SPREADSHEET:", e)
         return None
 
     try:
