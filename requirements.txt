@@ -1,6 +1,1 @@
-fastapi
-uvicorn
-gspread
-google-auth
-jinja2
-sqlalchemy
+psycopg2-binary
